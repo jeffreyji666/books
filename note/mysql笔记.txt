@@ -1,0 +1,341 @@
+1.mysql存储过程中，select null into variable会导致warning,需要DECLARE CONTINUE HANDLER FOR SQLWARNING BEGIN END;
+2.Incorrect key file for table './*.MYI'; try to repair it 错误修复：
+1）关闭mysql
+2)check table ***; repair table ***
+3)重启mysql
+如果无效则可尝试重建表，重建索引
+如果还是无效，不妨看下是不是因为insert into table select * from table语句中select结果集量巨大引起，如果是则需要更改为多次insert.
+
+2.Innodb有几种行锁算法：（官方资料请点击这里）
+记录锁（Record lock）：加在索引上的锁。只有通过索引条件检索数据，InnoDB才使用行级锁，否则，InnoDB将使用表锁！
+间隙锁（Gap lock）: 在索引记录之间的间隙(gap)上的锁或者索引之前，之后的。
+后码锁（Next-key lock）： 在间隙(gap)和间隙(gap)之后一条索引记录上的锁，也就是gap-lock和其后继一条记录锁的组合。它会在扫描过程中遇到的索引上加共享锁或排他锁。后码锁（Next-key lock）一方面是为了防止幻读, 另外一方面，是为了满足其恢复和复制的需要。
+下面看看Mysql官方解释：
+Next-key locking combines index-row locking with gap locking. InnoDB performs row-level locking in such a way that when it searches or scans a table index, it sets shared or exclusive locks on the index records it encounters. Thus, the row-level locks are actually index-record locks. In addition, a next-key lock on an index record also affects the “gap” before that index record. That is, a next-key lock is an index-record lock plus a gap lock on the gap preceding the index record.
+（间隙(gap)：对于键值在条件范围内但并不存在的记录，叫做“间隙（GAP)”）
+                   
+3.
+#1 确认有没有写入操作,确定写入条件
+#2 确认服务器,数据库等信息无误
+#dba掌控4环境ol similar QA dev
+#如果是某个cpu 100%,则进入mysql 查找 单条sql
+#top 1
+SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND <> 'sleep' AND TIME>10;
+#cpu 整体偏高则查找 锁状态
+SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND <> 'sleep' AND STATE = 'Locked' AND TIME>10;
+#如果cpu 不高 则查看 内存和 磁盘 io
+#服务启动
+nice -n -20 /usr/local/mysql5/bin/mysqld_safe --defaults-file=/usr/local/mysql5/etc/test.cnf --datadir=/data/mysql/data --user=mysql &
+#服务关闭
+/usr/local/mysql5/bin/mysqladmin -udba -p shutdown
+================权限管理=====================
+#无权限启动
+killall -TERM mysqld
+/usr/local/mysql5/bin/mysqld_safe --defaults-file=/usr/local/mysql5/etc/test.cnf --datadir=/data/mysql/data --user=mysql --skip-grant-tables &
+#设置root密码
+/opt/soft/mysql/bin/mysqladmin -u root password 123456
+/opt/soft/mysql/bin/mysqladmin -u root -p123456 flush-privileges
+#刷新权限表
+FLUSH PRIVILEGES;
+#创建用户并授权
+GRANT ALL PREVILEGES ON *.* TO 'user'@'192.168.%' IDENTIFIED BY '123456';
+GRANT REPLICATION SLAVE ON *.* TO 'user'@'192.168.%' IDENTIFIED BY '123456';
+GRANT USAGE ON *.* TO 'user'@'192.168.%' IDENTIFIED BY '123456';/*只授予登陆权限*/
+#查看权限
+SHOW PRIVILEGES;
+#追加权限
+GRANT SUPER ON *.* TO 'user'@'192.168.%'
+#查看权限
+SHOW GRANTS FOR 'user'@'localhost';
+#撤销权限
+REVOKE INSERT ON *.* FROM 'user'@'localhost';
+REVOKE ALL PRIVILEGES ON *.* FROM 'user'@'localhost';
+#对用户操作后记得 FLUSH PRIVILEGES;
+#创建用户
+CREATE USER 'user'@'localhost' IDENTIFIED BY 'mypass';FLUSH PRIVILEGES;
+#删除用户
+CREATE USER 'user'@'localhost' IDENTIFIED BY PASSWORD '*90E462C37378CED12064BB3388827D2BA3A9B689';FLUSH PRIVILEGES;
+#查看用户
+use mysql;
+SELECT user,host,password FROM user;
+#error: 'Host '192.168.50.193' is blocked because of many connection errors.  Unblock with 'mysqladmin flush-hosts''
+#主机禁掉了某个ip的访问
+>/usr/local/mysql/bin/mysqladmin flush-hosts -uuser -ppassword
+--max_connect_errors = 999999
+================备份========================
+#备份MySQL数据库的命令character-set 默认为utf8 备份 存储过程和触发器 -R dump functions and procedures -E dump events
+>mysqldump -hhostname -uusername -ppassword --default-character-set=latin1 databasename > backupfile.sql
+#备份MySQL数据库为带删除表的格式备份MySQL数据库为带删除表的格式，能够让该备份覆盖已有数据库而不需要手动删除原有数据库。
+>mysqldump ---add-drop-table -uusername -ppassword databasename > backupfile.sql
+#直接将MySQL数据库压缩备份
+>mysqldump -hhostname --master-date -uusername -ppassword databasename | gzip > backupfile.sql.gz
+>/usr/local/mysql/bin/mysqldump -Q -e --add-drop-table --add-locks --all --extended-insert --quick --no-autocommit --single-transaction -uuser --password tdb | bzip2 -2 > backupfile.sql.bz2
+#备份MySQL数据库某个(些)表 --skip-lock-tables 不锁表执行
+>mysqldump -hhostname -uusername -ppassword databasename specific_table1 specific_table2 > backupfile.sql
+#同时备份多个MySQL数据库
+>mysqldump -hhostname -uusername -ppassword --databases databasename1 databasename2 databasename3 > multibackupfile.sql
+#仅仅备份数据库结构
+>mysqldump --no-data --databases databasename1 databasename2 databasename3 > structurebackupfile.sql
+#备份服务器上所有数据库
+>mysqldump --all-databases  allbackupfile.sql
+#服务端执行操作
+setsid mysqldump --all-databases  allbackupfile.sql
+================恢复========================
+#还原MySQL数据库的命令
+>mysql -hhostname -uusername -ppassword databasename < backupfile.sql
+#还原压缩的MySQL数据库
+>gunzip -cd backupfile.sql.gz | mysql -uusername -ppassword databasename
+>bzip2 -cd backupfile.sql.bz2 | /usr/local/mysql/bin/mysql -uuser -p mydb
+#双库对倒
+将数据库转移到新服务器
+>mysqldump \-uusername \-ppassword databasename \| mysql \--host=*.*.*.\* \-C databasename
+#备份并用gzip压缩：
+>mysqldump < mysqldump options> | gzip > outputfile.sql.gz
+#从gzip备份恢复：
+>gunzip < outputfile.sql.gz | mysql < mysql options>
+#备份并用bzip压缩：
+>mysqldump < mysqldump options> | bzip2 > outputfile.sql.bz2
+#从bzip2备份恢复:
+>bunzip2 < outputfile.sql.bz2 | mysql < mysql options>
+================状态查询====================
+#服务器信息
+status;
+\s;
+#当前用户
+SELECT CURRENT_USER();
+SELECT USER();
+#当前数据库
+SELECT DATABASE();
+#mysql状态
+SHOW GLOBAL STATUS;
+#mysql变量
+SHOW [GLOBAL | SESSION] VARIABLES [LIKE 'pattern']
+SHOW GLOBAL VARIABLES;
+SHOW GLOBAL VARIABLES LIKE '%%';
+#设置MySQL变量
+SET GLOBAL slow_query_log=on;
+#InnoDB引擎状态
+SHOW ENGINE engine_name {LOGS | STATUS }
+SHOW ENGINE InnoDB STATUS\G;
+SHOW INNODB STATUS\G;
+#报警和异常
+SHOW COUNT(*) ERRORS;
+SELECT @@error_count;
+SHOW COUNT(*) WARNINGS;
+SELECT @@warning_count;
+#查看当前mysql进程
+SHOW PROCESSLIST;
+SHOW FULL PROCESSLIST;
+SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND <> 'sleep' AND TIME>10;
+#查看数据库大小
+SELECT table_schema AS 'Db Name', Round( Sum( data_length + index_length ) / 1024 / 1024, 3 ) AS 'Db Size (MB)', Round( Sum( data_free ) / 1024 / 1024, 3 ) AS 'Free Space (MB)' FROM information_schema.tables GROUP BY table_schema ;
+#表的主键
+SELECT k.column_name FROM information_schema.table_constraints t JOIN information_schema.key_column_usage k USING (constraint_name,table_schema,table_name) WHERE t.constraint_type='PRIMARY KEY' AND t.table_schema='db' AND t.table_name=tbl'
+#全局事务隔离级别
+SELECT @@global.tx_isolation;
+#会话级事务隔离级别
+SELECT @@tx_isolation;
+#修改全局事务隔离级别
+set global transaction isolation level read committed;
+#修改会话事务隔离级别
+set session transaction isolation level read committed;
+#查看列值分布情况
+SELECT * from testa procedure analyse();
+===============binlog====================
+#查看binlog
+>mysqlbinlog /opt/soft/mysql/data/logbin.000001 > binlog1.txt
+#按位置截取binlog
+>mysqlbinlog --start-position=185 --stop-position=338 /opt/soft/mysql/data/logbin.000001 > binlog1.txt
+#按时间截取binlog
+>mysqlbinlog --start-datetime="2010-01-07 11:25:56" --stop-datetime="2010-01-07 13:23:50" /opt/soft/mysql/data/logbin.000001 > binlog1.txt
+#使用binlog 恢复数据库
+>mysqlbinlog /opt/soft/mysql/data/logbin.000001 | mysql -uuser -ppassword
+>mysqlbinlog --start-position=185 --stop-position=338 /opt/soft/mysql/data/logbin.000001 | mysql -uuser -ppassword
+>mysqlbinlog --start-datetime="2010-01-07 11:25:56" --stop-datetime="2010-01-07 13:23:50" /opt/soft/mysql/data/logbin.000001 | mysql -uuser -ppassword
+#查看当前binlog文件组
+show master logs;
+#查看当前使用的binlog文件
+show binlog events;
+#刷新binlog文件组
+flush logs;
+reset master;
+#清除binlog
+PURGE {MASTER | BINARY} LOGS TO ‘log_name’; //log_name不会被清除
+PURGE {MASTER | BINARY} LOGS BEFORE ‘date’; //date不会被清除
+purge master logs to ‘binlog.000004′;
+purge master logs before ’2009-09-22 00:00:00′;
+#清除3天前的数据
+PURGE MASTER LOGS BEFORE DATE_SUB( NOW( ), INTERVAL 3 DAY);
+===============主从=======================
+#查看主机状态
+SHOW MASTER STATUS;
+#查看从机状态
+SHOW SLAVE STATUS\G;
+#修改从机中的主机信息
+CHANGEMASTER TO MASTER_HOST='master_host_name',MASTER_USER='replication_user_name',MASTER_PASSWORD='replication_password',MASTER_LOG_FILE='recorded_log_file_name',ASTER_LOG_POS=recorded_log_position;
+#关闭从机复制
+SLAVE STOP;
+SLAVE START;
+#只在本机进行操作,不写入binlog
+SET sql_log_bin = {0|1}
+#从机上设置跳过主机某个事务
+SET GLOBAL SQL_slave_SKIP_COUNTER = n
+#开启从机复制功能
+START SLAVE；
+#查看连接,此时从机与主机的连接状态应该是 ESTABLISHED
+system netstat -antp|grep /mysqld
+#sql_mode,最有效率的做法是使用字段的默认值
+SELECT @@GLOBAL.sql_mode;
+SELECT @@SESSION.sql_mode;
+SET [GLOBAL|SESSION] sql_mode='modes'
+#忽略的库
+--binlog-ignore-db=db_name
+--replicate-ignore-db=db_name/*从库*/
+--replicate-ignore-db=mysql/*从库必备*/
+#忽略跨库更新表
+--replicate-wild-ignore-table=db_name.%
+#单库复制
+--binlog-do-db=db_name
+--replicate-do-db=db_name/*从库*/
+#如果在其他库上执行目标库操作
+--replicate-wild-do-table = db_name.%
+--replicate-wild-do-table = db_name.table_name/*只复制单表*/
+#重写数据库
+--replicate-rewrite-db=from_name->to_name
+#mysql串烧必备
+--log-slave-updates
+#IOthread失败之后重启间隙
+--master-connect-retry=seconds/*默认60*/
+#主从超时时间
+--slave-net-timeout=seconds
+#忽略主从复制错误
+--slave-skip-errors=[err_code1,err_code2,... | all]
+--slave-skip-errors=1062
+#从库只读
+--read-only
+SET read_only=ON|OFF;
+#自动循环relay-log
+--max-relay-logs-size=size
+#是否自动清除relay-log
+--relay-log-space-limit=size/*0,会选择--max-relay-logs-size作为真实值,请确保此值是--max-relay-logs-size的两倍*/
+#禁止slave跟随mysql服务一起启动
+--skip-slave-start
+#向磁盘写入binlog的模式,每N次同步磁盘一次
+--sync_binlog=N/*默认0,由操作系统决定何时写入*/
+#数据传输容量必须一致
+max_allowed_packet
+=============分表=====================
+#查看是否支持和开启分表
+SHOW PLUGINS;
+SHOW VARIABLES LIKE '%partition%';
+=============倒数据===================
+#生成LOAD DATA mydata.txt 生成在服务器 data/db 目录中,用户拥有 FILE 权限
+SELECT * FROM mytable INTO OUTFILE 'a.txt';
+#从文件中加载数据,mydata.txt 必须在data目录中,用户拥有 FILE 权限
+LOAD DATA INFILE 'mydata.txt' INTO TABLE mydb.mytable;
+LOAD DATA INFILE 'mydata.txt' INTO TABLE mydb.mytable (col1,col2);
+LOAD DATA INFILE 'mydata.txt' INTO TABLE mydb.mytable (col1, @var1) SET col2 = @var1/100;
+LOAD DATA INFILE 'mydata.txt' INTO TABLE mydb.mytable (col1, col2) SET col3 = CURRENT_TIMESTAMP;
+LOAD DATA INFILE 'mydata.txt' INTO TABLE mydb.mytable (col1, @dummy, col2, @dummy, col3);/*丢弃某些列*/
+#InnoDB 关闭外键 加快
+SET FOREIGN_KEY_CHECKS=0;
+==============DDL=====================
+#创建库
+CREATE DATABASE mydb
+  DEFAULT CHARACTER SET utf8
+  DEFAULT COLLATE utf8_general_ci;
+#查看表信息
+SHOW TABLE STATUS FROM databasename LIKE 'tablename'\G;
+#查看表创建语句
+SHOW CREATE TABLE `database`.`table`\G;
+#查看列信息
+SHOW COLUMNS FROM mydb.mytable;
+DESC mydb.mytable;
+#查看索引信息
+SHOW INDEX FROM mydb.mytable;
+#收缩表空间
+OPTIMIZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE mydb.mytable;
+#纠正统计信息
+ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE tbl_name [, tbl_name] ...
+#创建表
+CREATE TABLE `wd_dist` (
+  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+  `idc` tinyint(4) UNSIGNED NOT NULL DEFAULT '0',
+  `idc_name` varchar(20) NOT NULL DEFAULT '',
+  `memo` varchar(20) NOT NULL DEFAULT '',
+  `dist_name` varchar(20) NOT NULL DEFAULT '',
+  `name` varchar(20) NOT NULL DEFAULT '',
+  `code` tinyint(4) NOT NULL DEFAULT '0',
+  `chk` tinyint(4) NOT NULL DEFAULT '0',
+  `create_date` date NOT NULL DEFAULT '0000-00-00',
+  `desc` varchar(128) NOT NULL DEFAULT '',
+  `db_memo` varchar(255) NOT NULL DEFAULT '',
+  PRIMARY KEY (`id`),
+  KEY `dist_name` (`dist_name`),
+  KEY `chk` (`chk`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1;
+#表改名
+ALTER TABLE mydb.mytable_old RENAME mydb.mytable;
+#添加列 列操作最好用一条语句执行完成
+ALTER TABLE mydb.mytable ADD COLUMN colname VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'remark';
+#修改列
+ALTER TABLE mydb.mytable ADD colname VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'remark';/*改数据类型*/
+ALTER TABLE mydb.mytable ALTER  colname SET {DEFAULT literal | DROP DEFAULT}/*修改默认值*/
+ALTER TABLE mydb.mytable CHANGE old_colname column_definition [FIRST|AFTER col_name] /*修改列名,或迁移列的位置*/
+#删除列
+ALTER TABLE mydb.mytable DROP COLUMN col1;
+#添加索引
+ALTER TABLE mydb.mytable ADD INDEX [index_name] [index_type] (index_col_name,...)
+#删除索引
+ALTER TABLE mydb.mytable DROP INDEX index_name
+#修改表的字符集
+ALTER TABLE mydb.mytable CONVERT TO CHARACTER SET charset_name [COLLATE collation_name]/*转换字符集*/
+ALTER TABLE mydb.mytable [DEFAULT] CHARACTER SET charset_name [COLLATE collation_name]/*设置默认字符集*/
+#移除移入表空间
+ALTER TABLE mydb.mytable DISCARD TABLESPACE
+ALTER TABLE mydb.mytable IMPORT TABLESPACE
+#修改表的引擎
+ALTER TABLE mydb.mytable ENGINE=InnoDB;
+ALTER TABLE mydb.mytable ENGINE=MyISAM;
+#当创建一个MyISAM表时，MySQL使用MAX_ROWS和AVG_ROW_LENGTH选项的乘积来确定得出的表有多大。
+#如果有一个选项未指定，则表的最大尺寸为65,536TB数据。
+#（如果操作系统不支持这么大的文件，则表的尺寸被限定在操作系统的限值处。）
+#如果您想缩小指针尺寸使索引更小，速度更快，并且您不需要大文件，则您可以通过设置myisam_data_pointer_size系统变量来减少默认指针的尺寸
+alter table_name max_rows=2000000000000,avg_low_length=500000;
+#The table is full
+#Operating System                File-size Limit
+#Win32 w/ FAT/FAT32                2GB/4GB
+#Win32 w/ NTFS                        2TB (possibly larger)
+#Linux 2.2-Intel 32-bit                2GB (LFS: 4GB)
+#Linux 2.4+                        (using ext3 file system) 4TB
+#Solaris 9/10                        16TB
+#MacOS X w/ HFS+                2TB
+#NetWare w/NSS file system        8TB
+#修改表的字符集
+alter table t convert to character set utf8 collcate ...
+============DML======================
+#直接将sql导出
+mysql -uroot -p123456 -e "sql" -hlocalhost > sql.txt
+#insert 时主键冲突 后改为 update
+INSERT INTO mydb.mytable (a,b,c) VALUES (1,2,3) ON DUPLICATE KEY UPDATE c=c+1;
+#查询不走 querycache
+SELECT SQL_NO_CACHE * FROM mydb.mytable LIMIT 10;
+#显式的 querycache
+SELECT SQL_CACHE * FROM mydb.mytable LIMIT 10;
+#MySQL中的空表
+SELECT now() FROM dual;
+#加密函数AES_ENCRYPT()和解密函数AES_DECRYPT()
+INSERT INTO userdata(username,pasword,encryptedpassword) VALUES ('smith','htims',AES_ENCRYPT('htims','key'))
+SELECT username,pasword,AES_DECRYPT(encryptedpassword,'key') FROM userdata
+==========分页=======================
+SELECT SQL_CALC_FOUND_ROWS * FROM `user` WHERE city_id>-1 LIMIT 1;
+SELECT FOUND_ROWS();
+===========测试======================
+#准备测试环境
+./sysbench --test=oltp --mysql-table-engine=innodb --oltp-table-size=100000000 --mysql-user=root --mysql-password=123456  --mysql-socket=/data/mysql5_5_20/mysql.sock --num-threads=1000  prepare
+#开测
+./sysbench --test=oltp --mysql-table-engine=innodb --oltp-table-size=100000000 --mysql-user=root --mysql-password=123456  --mysql-socket=/data/mysql5_5_20/mysql.sock --num-threads=1000  run
+#清理
+./sysbench --test=oltp --mysql-table-engine=innodb --oltp-table-size=100000000 --mysql-user=root --mysql-password=123456  --mysql-socket=/data/mysql5_5_20/mysql.sock --num-threads=1000  cleanup
+
+4.CREATE PROCEDURE test(IN param1 VARCHAR(256),OUT returnid INT)，需要注意参数格式
